@@ -157,7 +157,57 @@ class _MagicSortPageState extends State<MagicSortPage> {
                                     ),
                                   );
                                 },
-                                child: GameWidget(game: _game),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    IgnorePointer(
+                                      child: GameWidget(game: _game),
+                                    ),
+                                    RepaintBoundary(
+                                      child: CustomPaint(
+                                        painter: BottleBoardPainter(
+                                          state: state,
+                                        ),
+                                      ),
+                                    ),
+                                    BottleBoardOverlay(
+                                      state: state,
+                                      onTubeTap: (tubeIndex) {
+                                        context
+                                            .read<MagicSortCubit>()
+                                            .onTubeTapped(tubeIndex);
+                                      },
+                                    ),
+                                    if (state.tubes.isEmpty)
+                                      Center(
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 18,
+                                            vertical: 12,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red.withValues(
+                                              alpha: 0.18,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border: Border.all(
+                                              color: Colors.redAccent
+                                                  .withValues(alpha: 0.5),
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            '보드 데이터가 비어 있습니다',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               );
                             },
                           ),
@@ -585,15 +635,20 @@ class MagicSortCubit extends Cubit<MagicSortState> {
 
   final ProgressRepository repository;
   final MagicAudioService audioService;
-  final Random _seedRandom = Random(7281);
 
   Future<void> loadInitialData() async {
     final unlockedStage = repository.loadUnlockedStage();
     final bestStars = repository.loadBestStars();
+    debugPrint(
+      '[MagicBottle] loadInitialData unlocked=$unlockedStage bestStars=$bestStars',
+    );
     final initialStage = _createStageState(
       stageNumber: 1,
       unlockedStage: unlockedStage,
       bestStars: bestStars,
+    );
+    debugPrint(
+      '[MagicBottle] initialStage stage=${initialStage.currentStage} tubes=${initialStage.tubes.length}',
     );
     emit(initialStage);
   }
@@ -811,10 +866,10 @@ class MagicSortCubit extends Cubit<MagicSortState> {
     required Map<int, int> bestStars,
   }) {
     final definition = stageDefinitions[stageNumber - 1];
-    final generatedTubes = _generateSolvableLevel(
-      definition,
-      _seedRandom.nextInt(1 << 31),
-    );
+    final generatedTubes = [
+      for (final balls in definition.layout)
+        TubeModel(balls: List<int>.from(balls)),
+    ];
 
     return MagicSortState(
       currentStage: stageNumber,
@@ -835,57 +890,6 @@ class MagicSortCubit extends Cubit<MagicSortState> {
       stageSelectionNonce: 0,
       isAnimating: false,
     );
-  }
-
-  List<TubeModel> _generateSolvableLevel(StageDefinition definition, int seed) {
-    final random = Random(seed + definition.stageNumber * 97);
-    final tubes = <TubeModel>[
-      for (int color = 0; color < definition.colorCount; color++)
-        TubeModel(balls: List<int>.filled(tubeCapacity, color)),
-      for (int i = 0; i < definition.emptyTubeCount; i++)
-        const TubeModel(balls: []),
-    ];
-
-    // 해결된 상태에서 합법적인 이동을 여러 번 수행하면
-    // 결과 상태는 항상 원래 상태로 되돌릴 수 있으므로 "해결 가능"이 보장된다.
-    MoveAnimation? previousMove;
-    for (int step = 0; step < definition.scrambleSteps; step++) {
-      final validMoves = <MoveAnimation>[];
-
-      for (int from = 0; from < tubes.length; from++) {
-        for (int to = 0; to < tubes.length; to++) {
-          final move = _buildMove(tubes, from, to);
-          if (move == null) {
-            continue;
-          }
-
-          final isImmediateReverse =
-              previousMove != null &&
-              previousMove.fromIndex == move.toIndex &&
-              previousMove.toIndex == move.fromIndex &&
-              previousMove.colorIndex == move.colorIndex;
-
-          if (!isImmediateReverse) {
-            validMoves.add(move);
-          }
-        }
-      }
-
-      if (validMoves.isEmpty) {
-        break;
-      }
-
-      final chosenMove = validMoves[random.nextInt(validMoves.length)];
-      _applyMove(tubes, chosenMove);
-      previousMove = chosenMove;
-    }
-
-    // 퍼즐이 우연히 너무 쉽게 끝난 경우를 피하기 위해 한 번 더 섞는다.
-    if (_isSolved(tubes)) {
-      return _generateSolvableLevel(definition, seed + 1);
-    }
-
-    return tubes.deepCopy();
   }
 
   MoveAnimation? _findHintMove(List<TubeModel> tubes) {
@@ -1099,15 +1103,15 @@ class StageDefinition {
     required this.stageNumber,
     required this.colorCount,
     required this.emptyTubeCount,
-    required this.scrambleSteps,
     required this.parMoves,
+    required this.layout,
   });
 
   final int stageNumber;
   final int colorCount;
   final int emptyTubeCount;
-  final int scrambleSteps;
   final int parMoves;
+  final List<List<int>> layout;
 }
 
 const int tubeCapacity = 4;
@@ -1117,71 +1121,144 @@ const List<StageDefinition> stageDefinitions = [
     stageNumber: 1,
     colorCount: 3,
     emptyTubeCount: 2,
-    scrambleSteps: 8,
     parMoves: 7,
+    layout: [
+      [0, 1, 2, 0],
+      [1, 2, 0, 1],
+      [2, 0, 1, 2],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 2,
     colorCount: 3,
     emptyTubeCount: 2,
-    scrambleSteps: 10,
     parMoves: 8,
+    layout: [
+      [0, 1, 1, 2],
+      [2, 0, 2, 1],
+      [1, 2, 0, 0],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 3,
     colorCount: 4,
     emptyTubeCount: 2,
-    scrambleSteps: 14,
     parMoves: 11,
+    layout: [
+      [0, 1, 2, 3],
+      [3, 2, 1, 0],
+      [1, 0, 3, 2],
+      [2, 3, 0, 1],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 4,
     colorCount: 4,
     emptyTubeCount: 2,
-    scrambleSteps: 18,
     parMoves: 13,
+    layout: [
+      [0, 1, 2, 0],
+      [2, 3, 1, 3],
+      [1, 0, 3, 2],
+      [3, 2, 0, 1],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 5,
     colorCount: 4,
     emptyTubeCount: 2,
-    scrambleSteps: 22,
     parMoves: 15,
+    layout: [
+      [0, 1, 2, 3],
+      [1, 2, 3, 0],
+      [2, 3, 0, 1],
+      [3, 0, 1, 2],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 6,
     colorCount: 5,
     emptyTubeCount: 2,
-    scrambleSteps: 26,
     parMoves: 18,
+    layout: [
+      [0, 1, 2, 3],
+      [4, 3, 2, 1],
+      [0, 4, 3, 2],
+      [1, 0, 4, 3],
+      [2, 1, 0, 4],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 7,
     colorCount: 5,
     emptyTubeCount: 2,
-    scrambleSteps: 30,
     parMoves: 20,
+    layout: [
+      [0, 1, 2, 3],
+      [4, 0, 1, 2],
+      [3, 4, 0, 1],
+      [2, 3, 4, 0],
+      [1, 2, 3, 4],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 8,
     colorCount: 5,
     emptyTubeCount: 2,
-    scrambleSteps: 34,
     parMoves: 22,
+    layout: [
+      [0, 1, 2, 3],
+      [4, 2, 1, 0],
+      [1, 3, 4, 2],
+      [0, 4, 3, 1],
+      [2, 0, 4, 3],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 9,
     colorCount: 5,
     emptyTubeCount: 3,
-    scrambleSteps: 38,
     parMoves: 24,
+    layout: [
+      [0, 1, 2, 3],
+      [4, 0, 2, 1],
+      [3, 4, 1, 0],
+      [2, 3, 0, 4],
+      [1, 2, 4, 3],
+      [],
+      [],
+    ],
   ),
   StageDefinition(
     stageNumber: 10,
     colorCount: 5,
     emptyTubeCount: 3,
-    scrambleSteps: 42,
     parMoves: 26,
+    layout: [
+      [0, 3, 1, 4],
+      [0, 2, 1, 2],
+      [3, 4, 0, 2],
+      [4, 4, 1, 0],
+      [3, 1, 3, 2],
+      [],
+      [],
+    ],
   ),
 ];
 
@@ -1303,13 +1380,21 @@ class ProgressRepository {
 }
 
 class MagicAudioService {
-  MagicAudioService() {
-    _player.setReleaseMode(ReleaseMode.stop);
-    _player.setPlayerMode(PlayerMode.lowLatency);
-    _player.setVolume(1);
-  }
+  AudioPlayer? _player;
 
-  final AudioPlayer _player = AudioPlayer();
+  Future<AudioPlayer> _ensurePlayer() async {
+    final existing = _player;
+    if (existing != null) {
+      return existing;
+    }
+
+    final created = AudioPlayer();
+    await created.setReleaseMode(ReleaseMode.stop);
+    await created.setPlayerMode(PlayerMode.lowLatency);
+    await created.setVolume(1);
+    _player = created;
+    return created;
+  }
 
   Future<void> playSelect() async {
     await _playAssetOrFallback(
@@ -1344,8 +1429,9 @@ class MagicAudioService {
     required SystemSoundType fallback,
   }) async {
     try {
-      await _player.stop();
-      await _player.play(AssetSource(assetPath));
+      final player = await _ensurePlayer();
+      await player.stop();
+      await player.play(AssetSource(assetPath));
     } catch (_) {
       await SystemSound.play(fallback);
     }
@@ -1723,6 +1809,383 @@ class BottleBoardGame extends FlameGame {
   }
 }
 
+class BottleBoardPainter extends CustomPainter {
+  BottleBoardPainter({required this.state});
+
+  final MagicSortState state;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (state.tubes.isEmpty) {
+      return;
+    }
+
+    final rects = _computeTubeRects(size, state.tubes.length);
+    final tubeWidth = rects.first.width;
+
+    if (state.hintMove != null) {
+      _renderHintPath(canvas, rects, state.hintMove!);
+    }
+
+    for (int i = 0; i < state.tubes.length; i++) {
+      final rect = rects[i];
+      final tube = state.tubes[i];
+      final isSelected = i == state.selectedTube;
+      final isHintSource = state.hintMove?.fromIndex == i;
+      final isHintTarget = state.hintMove?.toIndex == i;
+
+      _renderTube(
+        canvas,
+        rect,
+        tube,
+        isSelected: isSelected,
+        isHintSource: isHintSource,
+        isHintTarget: isHintTarget,
+        tubeWidth: tubeWidth,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant BottleBoardPainter oldDelegate) {
+    return oldDelegate.state != state;
+  }
+}
+
+class BottleBoardOverlay extends StatelessWidget {
+  const BottleBoardOverlay({
+    super.key,
+    required this.state,
+    required this.onTubeTap,
+  });
+
+  final MagicSortState state;
+  final ValueChanged<int> onTubeTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (state.tubes.isEmpty) {
+      return const SizedBox.expand();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final rects = _computeTubeRects(
+          Size(constraints.maxWidth, constraints.maxHeight),
+          state.tubes.length,
+        );
+
+        return Stack(
+          children: [
+            for (int i = 0; i < state.tubes.length; i++)
+              Positioned(
+                left: rects[i].left,
+                top: rects[i].top,
+                width: rects[i].width,
+                height: rects[i].height,
+                child: _TubeWidget(
+                  tube: state.tubes[i],
+                  isSelected: i == state.selectedTube,
+                  isHintSource: state.hintMove?.fromIndex == i,
+                  isHintTarget: state.hintMove?.toIndex == i,
+                  onTap: () => onTubeTap(i),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _TubeWidget extends StatelessWidget {
+  const _TubeWidget({
+    required this.tube,
+    required this.isSelected,
+    required this.isHintSource,
+    required this.isHintTarget,
+    required this.onTap,
+  });
+
+  final TubeModel tube;
+  final bool isSelected;
+  final bool isHintSource;
+  final bool isHintTarget;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final glowColor =
+        isHintTarget ? const Color(0xFFFFE066) : const Color(0xFF8F65FF);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.fromLTRB(10, 12, 10, 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white.withValues(alpha: 0.28),
+              Colors.white.withValues(alpha: 0.08),
+            ],
+          ),
+          border: Border.all(
+            color: Colors.white.withValues(
+              alpha: isSelected || isHintSource || isHintTarget ? 0.68 : 0.24,
+            ),
+            width: isSelected ? 2.4 : 1.6,
+          ),
+          boxShadow: [
+            if (isSelected || isHintSource || isHintTarget)
+              BoxShadow(
+                color: glowColor.withValues(alpha: 0.45),
+                blurRadius: 24,
+                spreadRadius: 2,
+              ),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            for (int slot = tubeCapacity - 1; slot >= 0; slot--)
+              Expanded(
+                child: Center(
+                  child:
+                      slot < tube.balls.length
+                          ? _OrbWidget(color: magicColors[tube.balls[slot]])
+                          : Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.08),
+                              ),
+                            ),
+                          ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OrbWidget extends StatelessWidget {
+  const _OrbWidget({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          center: const Alignment(-0.25, -0.25),
+          radius: 0.95,
+          colors: [
+            Colors.white.withValues(alpha: 0.95),
+            color.withValues(alpha: 0.98),
+            color.withValues(alpha: 0.76),
+          ],
+          stops: const [0.0, 0.18, 1.0],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.45),
+            blurRadius: 14,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Align(
+        alignment: const Alignment(-0.25, -0.25),
+        child: Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.72),
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+List<Rect> _computeTubeRects(Size boardSize, int count) {
+  const double horizontalPadding = 24;
+  const double topPadding = 22;
+  const double bottomPadding = 36;
+  const double gap = 16;
+  final availableWidth = boardSize.width - horizontalPadding * 2;
+  final baseTubeWidth = min(92.0, (availableWidth - gap * (count - 1)) / count);
+  final tubeWidth = max(56.0, baseTubeWidth);
+  final totalWidth = tubeWidth * count + gap * (count - 1);
+  final startX = (boardSize.width - totalWidth) / 2;
+  final tubeHeight = min(
+    boardSize.height - topPadding - bottomPadding,
+    boardSize.height * 0.72,
+  );
+  final top = max(topPadding, (boardSize.height - tubeHeight) / 2 - 8);
+
+  return List.generate(count, (index) {
+    final left = startX + index * (tubeWidth + gap);
+    return Rect.fromLTWH(left, top, tubeWidth, tubeHeight);
+  });
+}
+
+void _renderHintPath(Canvas canvas, List<Rect> rects, HintMove hintMove) {
+  final start = Offset(
+    rects[hintMove.fromIndex].center.dx,
+    rects[hintMove.fromIndex].top + 24,
+  );
+  final end = Offset(
+    rects[hintMove.toIndex].center.dx,
+    rects[hintMove.toIndex].top + 24,
+  );
+  final path =
+      Path()
+        ..moveTo(start.dx, start.dy)
+        ..quadraticBezierTo(
+          (start.dx + end.dx) / 2,
+          min(start.dy, end.dy) - 40,
+          end.dx,
+          end.dy,
+        );
+
+  final paint =
+      Paint()
+        ..color = const Color(0xFFFFE066).withValues(alpha: 0.42)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+  canvas.drawPath(path, paint);
+}
+
+void _renderTube(
+  Canvas canvas,
+  Rect rect,
+  TubeModel tube, {
+  required bool isSelected,
+  required bool isHintSource,
+  required bool isHintTarget,
+  required double tubeWidth,
+}) {
+  final outerRRect = RRect.fromRectAndRadius(
+    rect,
+    Radius.circular(tubeWidth * 0.4),
+  );
+  final innerRect = Rect.fromLTWH(
+    rect.left + tubeWidth * 0.14,
+    rect.top + tubeWidth * 0.12,
+    rect.width - tubeWidth * 0.28,
+    rect.height - tubeWidth * 0.18,
+  );
+
+  if (isSelected || isHintSource || isHintTarget) {
+    final glowColor =
+        isHintTarget ? const Color(0xFFFFE066) : const Color(0xFF8F65FF);
+    final glowPaint =
+        Paint()
+          ..color = glowColor.withValues(alpha: isSelected ? 0.45 : 0.30)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 22);
+    canvas.drawRRect(outerRRect.inflate(6), glowPaint);
+  }
+
+  final glassPaint =
+      Paint()
+        ..shader = ui.Gradient.linear(rect.topLeft, rect.bottomRight, [
+          Colors.white.withValues(alpha: 0.28),
+          Colors.white.withValues(alpha: 0.08),
+        ]);
+  canvas.drawRRect(outerRRect, glassPaint);
+
+  final outlinePaint =
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..shader = ui.Gradient.linear(rect.topLeft, rect.bottomRight, [
+          Colors.white.withValues(alpha: 0.78),
+          Colors.white.withValues(alpha: 0.18),
+        ]);
+  canvas.drawRRect(outerRRect, outlinePaint);
+
+  final glossPaint =
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(rect.left, rect.top),
+          Offset(rect.left + rect.width * 0.4, rect.bottom),
+          [
+            Colors.white.withValues(alpha: 0.24),
+            Colors.white.withValues(alpha: 0.02),
+          ],
+        );
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        rect.left + 8,
+        rect.top + 8,
+        rect.width * 0.22,
+        rect.height - 16,
+      ),
+      const Radius.circular(16),
+    ),
+    glossPaint,
+  );
+
+  final orbRadius = innerRect.width * 0.36;
+  final verticalSpacing = innerRect.height / tubeCapacity;
+
+  for (int i = 0; i < tube.balls.length; i++) {
+    final colorIndex = tube.balls[i];
+    final center = Offset(
+      innerRect.center.dx,
+      innerRect.bottom - verticalSpacing * (i + 0.5),
+    );
+    _renderOrb(canvas, center, orbRadius, magicColors[colorIndex]);
+  }
+}
+
+void _renderOrb(Canvas canvas, Offset center, double radius, Color color) {
+  final glowPaint =
+      Paint()
+        ..color = color.withValues(alpha: 0.4)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
+  canvas.drawCircle(center, radius * 1.25, glowPaint);
+
+  final orbPaint =
+      Paint()
+        ..shader = ui.Gradient.radial(
+          center.translate(-radius * 0.18, -radius * 0.22),
+          radius * 1.4,
+          [
+            Colors.white.withValues(alpha: 0.95),
+            color.withValues(alpha: 0.98),
+            color.withValues(alpha: 0.72),
+          ],
+          [0, 0.18, 1],
+        );
+  canvas.drawCircle(center, radius, orbPaint);
+
+  final shinePaint = Paint()..color = Colors.white.withValues(alpha: 0.65);
+  canvas.drawCircle(
+    center.translate(-radius * 0.25, -radius * 0.28),
+    radius * 0.18,
+    shinePaint,
+  );
+}
+
 class _SparkleParticle {
   _SparkleParticle({
     required this.x,
@@ -1770,7 +2233,7 @@ const List<Color> magicColors = [
 
 extension TubeCopyExtension on List<TubeModel> {
   List<TubeModel> deepCopy() {
-    return map((tube) => tube.copy()).toList(growable: false);
+    return map((tube) => tube.copy()).toList(growable: true);
   }
 }
 
