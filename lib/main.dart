@@ -5,10 +5,25 @@ import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flame/game.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+const String _releaseBannerAdUnitIdAndroid =
+    'ca-app-pub-6516622519474642/8898217393';
+const String _releaseInterstitialAdUnitIdAndroid =
+    'ca-app-pub-6516622519474642/4852842784';
+const String _testBannerAdUnitIdAndroid =
+    'ca-app-pub-3940256099942544/6300978111';
+const String _testBannerAdUnitIdIos =
+    'ca-app-pub-3940256099942544/2934735716';
+const String _testInterstitialAdUnitIdAndroid =
+    'ca-app-pub-3940256099942544/1033173712';
+const String _testInterstitialAdUnitIdIos =
+    'ca-app-pub-3940256099942544/4411468910';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,8 +34,33 @@ Future<void> main() async {
   // 상태 저장을 위해 앱 시작 시 SharedPreferences 를 미리 준비한다.
   final prefs = await SharedPreferences.getInstance();
   final repository = ProgressRepository(prefs);
+  await MobileAds.instance.initialize();
 
   runApp(MagicBottleApp(repository: repository));
+}
+
+String get bannerAdUnitId {
+  if (kDebugMode) {
+    return !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+        ? _testBannerAdUnitIdIos
+        : _testBannerAdUnitIdAndroid;
+  }
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    return _releaseBannerAdUnitIdAndroid;
+  }
+  return _testBannerAdUnitIdIos;
+}
+
+String get interstitialAdUnitId {
+  if (kDebugMode) {
+    return !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+        ? _testInterstitialAdUnitIdIos
+        : _testInterstitialAdUnitIdAndroid;
+  }
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    return _releaseInterstitialAdUnitIdAndroid;
+  }
+  return _testInterstitialAdUnitIdIos;
 }
 
 class MagicBottleApp extends StatelessWidget {
@@ -63,6 +103,10 @@ class MagicSortPage extends StatefulWidget {
 
 class _MagicSortPageState extends State<MagicSortPage> {
   late final BottleBoardGame _game;
+  BannerAd? _bannerAd;
+  bool _isBannerLoaded = false;
+  InterstitialAd? _interstitialAd;
+  int _clearsSinceInterstitial = 0;
 
   @override
   void initState() {
@@ -74,6 +118,15 @@ class _MagicSortPageState extends State<MagicSortPage> {
         context.read<MagicSortCubit>().onTubeTapped(tubeIndex);
       },
     );
+    _loadBannerAd();
+    _loadInterstitialAd();
+  }
+
+  @override
+  void dispose() {
+    _bannerAd?.dispose();
+    _interstitialAd?.dispose();
+    super.dispose();
   }
 
   @override
@@ -93,6 +146,7 @@ class _MagicSortPageState extends State<MagicSortPage> {
 
         if (state.victoryNonce > 0) {
           if (!mounted) return;
+          _handleInterstitialOpportunity();
           await _showVictoryDialog(this.context, state);
         }
       },
@@ -218,6 +272,15 @@ class _MagicSortPageState extends State<MagicSortPage> {
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
                       child: _BottomHud(state: state),
                     ),
+                    if (_isBannerLoaded && _bannerAd != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: SizedBox(
+                          width: _bannerAd!.size.width.toDouble(),
+                          height: _bannerAd!.size.height.toDouble(),
+                          child: AdWidget(ad: _bannerAd!),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -226,6 +289,72 @@ class _MagicSortPageState extends State<MagicSortPage> {
         },
       ),
     );
+  }
+
+  void _loadBannerAd() {
+    final ad = BannerAd(
+      adUnitId: bannerAdUnitId,
+      size: AdSize.banner,
+      request: const AdRequest(),
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          if (!mounted) {
+            ad.dispose();
+            return;
+          }
+          setState(() {
+            _bannerAd = ad as BannerAd;
+            _isBannerLoaded = true;
+          });
+        },
+        onAdFailedToLoad: (ad, error) {
+          debugPrint('[MagicBottle] banner failed: $error');
+          ad.dispose();
+        },
+      ),
+    );
+    ad.load();
+  }
+
+  void _loadInterstitialAd() {
+    InterstitialAd.load(
+      adUnitId: interstitialAdUnitId,
+      request: const AdRequest(),
+      adLoadCallback: InterstitialAdLoadCallback(
+        onAdLoaded: (ad) {
+          _interstitialAd?.dispose();
+          _interstitialAd = ad;
+          _interstitialAd?.setImmersiveMode(true);
+          _interstitialAd?.fullScreenContentCallback = FullScreenContentCallback(
+            onAdDismissedFullScreenContent: (ad) {
+              ad.dispose();
+              _interstitialAd = null;
+              _loadInterstitialAd();
+            },
+            onAdFailedToShowFullScreenContent: (ad, error) {
+              debugPrint('[MagicBottle] interstitial show failed: $error');
+              ad.dispose();
+              _interstitialAd = null;
+              _loadInterstitialAd();
+            },
+          );
+        },
+        onAdFailedToLoad: (error) {
+          debugPrint('[MagicBottle] interstitial failed: $error');
+          _interstitialAd = null;
+        },
+      ),
+    );
+  }
+
+  void _handleInterstitialOpportunity() {
+    _clearsSinceInterstitial += 1;
+    if (_clearsSinceInterstitial < 3) {
+      return;
+    }
+    _clearsSinceInterstitial = 0;
+    _interstitialAd?.show();
+    _interstitialAd = null;
   }
 
   Future<void> _showStageSelector(
@@ -1256,6 +1385,149 @@ const List<StageDefinition> stageDefinitions = [
       [3, 4, 0, 2],
       [4, 4, 1, 0],
       [3, 1, 3, 2],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 11,
+    colorCount: 3,
+    emptyTubeCount: 2,
+    parMoves: 9,
+    layout: [
+      [1, 0, 0, 2],
+      [2, 1, 2, 0],
+      [1, 2, 1, 0],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 12,
+    colorCount: 3,
+    emptyTubeCount: 2,
+    parMoves: 10,
+    layout: [
+      [1, 2, 1, 0],
+      [0, 1, 2, 2],
+      [2, 0, 0, 1],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 13,
+    colorCount: 4,
+    emptyTubeCount: 2,
+    parMoves: 13,
+    layout: [
+      [0, 2, 1, 3],
+      [2, 0, 3, 1],
+      [1, 3, 0, 2],
+      [3, 1, 2, 0],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 14,
+    colorCount: 4,
+    emptyTubeCount: 2,
+    parMoves: 14,
+    layout: [
+      [0, 2, 1, 3],
+      [2, 0, 3, 2],
+      [1, 3, 2, 0],
+      [3, 1, 0, 1],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 15,
+    colorCount: 4,
+    emptyTubeCount: 2,
+    parMoves: 15,
+    layout: [
+      [1, 0, 2, 3],
+      [2, 3, 1, 0],
+      [3, 1, 0, 2],
+      [0, 2, 3, 1],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 16,
+    colorCount: 5,
+    emptyTubeCount: 2,
+    parMoves: 18,
+    layout: [
+      [3, 0, 4, 2],
+      [4, 2, 1, 3],
+      [4, 0, 3, 1],
+      [0, 4, 2, 1],
+      [2, 1, 3, 0],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 17,
+    colorCount: 5,
+    emptyTubeCount: 2,
+    parMoves: 20,
+    layout: [
+      [3, 2, 4, 1],
+      [4, 1, 0, 3],
+      [0, 3, 2, 4],
+      [2, 4, 1, 0],
+      [1, 0, 3, 2],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 18,
+    colorCount: 5,
+    emptyTubeCount: 2,
+    parMoves: 22,
+    layout: [
+      [1, 0, 2, 4],
+      [3, 1, 4, 0],
+      [4, 3, 2, 0],
+      [2, 4, 1, 3],
+      [3, 2, 0, 1],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 19,
+    colorCount: 5,
+    emptyTubeCount: 3,
+    parMoves: 24,
+    layout: [
+      [0, 3, 4, 1],
+      [1, 4, 0, 2],
+      [2, 0, 1, 3],
+      [4, 2, 0, 3],
+      [3, 1, 2, 4],
+      [],
+      [],
+    ],
+  ),
+  StageDefinition(
+    stageNumber: 20,
+    colorCount: 5,
+    emptyTubeCount: 3,
+    parMoves: 26,
+    layout: [
+      [0, 4, 0, 2],
+      [0, 3, 1, 2],
+      [1, 2, 4, 2],
+      [1, 0, 4, 3],
+      [3, 3, 4, 1],
       [],
       [],
     ],

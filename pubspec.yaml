@@ -14,6 +14,7 @@ dependencies:
   flutter_bloc: ^8.1.0
   shared_preferences: ^2.2.0
   audioplayers: ^5.1.0
+  google_mobile_ads: ^6.0.0
 
 dev_dependencies:
   flutter_test:

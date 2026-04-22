@@ -40,6 +40,9 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- iOS 앱 ID가 Android와 다르게 발급된 경우 이 값을 교체해야 합니다. -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-6516622519474642~8880551855</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
