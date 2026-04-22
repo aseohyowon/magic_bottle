@@ -1,0 +1,24 @@
+name: magic_bottle
+description: "Magic Sort style color sorting puzzle for iOS-first Flutter + Flame."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flame: ^1.10.0
+  flutter_bloc: ^8.1.0
+  shared_preferences: ^2.2.0
+  audioplayers: ^5.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
